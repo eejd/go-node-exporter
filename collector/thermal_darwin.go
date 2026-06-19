@@ -44,7 +44,6 @@ struct ref_with_ret FetchThermal() {
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"unsafe"
@@ -115,6 +114,12 @@ func (c *thermCollector) Update(ch chan<- prometheus.Metric) error {
 	if err != nil {
 		return err
 	}
+	// cpuPowerStatus is nil when IOPMCopyCPUPowerStatus returns kIOReturnNotFound,
+	// which is expected on Apple Silicon (M-series) where the Intel-era CPU power
+	// throttle API is not populated. Skip those metrics but still collect temperatures.
+	if cpuPowerStatus == nil {
+		c.logger.Debug("CPU power status unavailable, skipping thermal throttle metrics")
+	}
 	if value, ok := cpuPowerStatus[(string(C.kIOPMCPUPowerLimitSchedulerTimeKey))]; ok {
 		ch <- c.cpuSchedulerLimit.mustNewConstMetric(float64(value) / 100.0)
 	}
@@ -137,7 +142,10 @@ func fetchCPUPowerStatus() (map[string]int, error) {
 	}()
 
 	if C.kIOReturnNotFound == cfDictRef.ret {
-		return nil, errors.New("no CPU power status has been recorded")
+		// CPU power status is unavailable (e.g., Apple Silicon where this Intel-era
+		// IOPMCopyCPUPowerStatus API is not populated). Return nil map, no error —
+		// the caller will skip the throttle metrics and still collect temperatures.
+		return nil, nil
 	}
 
 	if C.kIOReturnSuccess != cfDictRef.ret {
