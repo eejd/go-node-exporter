@@ -426,5 +426,7 @@ func (c *zfsCollector) Update(ch chan<- prometheus.Metric) error {
 			), m.valueType, v)
 	}
 
-	return nil
+	// Per-dataset metrics: implemented on FreeBSD via sysctl tree enumeration;
+	// no-op on Darwin (OpenZFS on macOS does not expose the dataset sysctl tree).
+	return c.updateDatasetStats(ch)
 }
