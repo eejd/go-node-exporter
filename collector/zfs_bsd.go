@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !nozfs
+//go:build (freebsd || darwin) && !nozfs
 
 package collector
 
@@ -33,6 +33,7 @@ const (
 func NewZFSCollector(logger *slog.Logger) (Collector, error) {
 	return &zfsCollector{
 		sysctls: []bsdSysctl{
+			// ABD (ARC Buffer Data) stats
 			{
 				name:        "abdstats_linear_count_total",
 				description: "ZFS ARC buffer data linear count",
@@ -75,6 +76,7 @@ func NewZFSCollector(logger *slog.Logger) (Collector, error) {
 				dataType:    bsdSysctlTypeUint64,
 				valueType:   prometheus.GaugeValue,
 			},
+			// ARC stats — core efficiency
 			{
 				name:        "arcstats_anon_bytes",
 				description: "ZFS ARC anon size",
@@ -208,7 +210,9 @@ func NewZFSCollector(logger *slog.Logger) (Collector, error) {
 				dataType:    bsdSysctlTypeUint64,
 				valueType:   prometheus.GaugeValue,
 			},
-			// when FreeBSD 14.0+, `meta/pm/pd` install of `p`.
+			// FreeBSD 14+ and OpenZFS: meta/pm/pd supersede p in newer releases;
+			// all four are retained so older (p) and newer (meta/pm/pd) kernels
+			// each emit whichever MIBs are present. Missing MIBs are silently skipped.
 			{
 				name:        "arcstats_p_bytes",
 				description: "ZFS ARC MRU target size",
@@ -218,7 +222,7 @@ func NewZFSCollector(logger *slog.Logger) (Collector, error) {
 			},
 			{
 				name:        "arcstats_meta_bytes",
-				description: "ZFS ARC metadata target frac ",
+				description: "ZFS ARC metadata target frac",
 				mib:         "kstat.zfs.misc.arcstats.meta",
 				dataType:    bsdSysctlTypeUint64,
 				valueType:   prometheus.GaugeValue,
@@ -244,17 +248,159 @@ func NewZFSCollector(logger *slog.Logger) (Collector, error) {
 				dataType:    bsdSysctlTypeUint64,
 				valueType:   prometheus.GaugeValue,
 			},
+			// L2ARC stats — secondary cache efficiency and I/O
+			{
+				name:        "arcstats_l2_hits_total",
+				description: "ZFS L2ARC hits",
+				mib:         "kstat.zfs.misc.arcstats.l2_hits",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_misses_total",
+				description: "ZFS L2ARC misses",
+				mib:         "kstat.zfs.misc.arcstats.l2_misses",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_size_bytes",
+				description: "ZFS L2ARC size (uncompressed)",
+				mib:         "kstat.zfs.misc.arcstats.l2_size",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.GaugeValue,
+			},
+			{
+				name:        "arcstats_l2_asize_bytes",
+				description: "ZFS L2ARC actual size (compressed)",
+				mib:         "kstat.zfs.misc.arcstats.l2_asize",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.GaugeValue,
+			},
+			{
+				name:        "arcstats_l2_hdr_bytes",
+				description: "ZFS L2ARC header size",
+				mib:         "kstat.zfs.misc.arcstats.l2_hdr_size",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.GaugeValue,
+			},
+			{
+				name:        "arcstats_l2_read_bytes_total",
+				description: "ZFS L2ARC bytes read",
+				mib:         "kstat.zfs.misc.arcstats.l2_read_bytes",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_write_bytes_total",
+				description: "ZFS L2ARC bytes written",
+				mib:         "kstat.zfs.misc.arcstats.l2_write_bytes",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_rw_clash_total",
+				description: "ZFS L2ARC read/write clashes",
+				mib:         "kstat.zfs.misc.arcstats.l2_rw_clash",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_cksum_bad_total",
+				description: "ZFS L2ARC checksum errors",
+				mib:         "kstat.zfs.misc.arcstats.l2_cksum_bad",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_io_error_total",
+				description: "ZFS L2ARC I/O errors",
+				mib:         "kstat.zfs.misc.arcstats.l2_io_error",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_feeds_total",
+				description: "ZFS L2ARC feed count",
+				mib:         "kstat.zfs.misc.arcstats.l2_feeds",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_writes_sent_total",
+				description: "ZFS L2ARC writes sent",
+				mib:         "kstat.zfs.misc.arcstats.l2_writes_sent",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_writes_done_total",
+				description: "ZFS L2ARC writes completed",
+				mib:         "kstat.zfs.misc.arcstats.l2_writes_done",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_writes_error_total",
+				description: "ZFS L2ARC write errors",
+				mib:         "kstat.zfs.misc.arcstats.l2_writes_error",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "arcstats_l2_abort_lowmem_total",
+				description: "ZFS L2ARC writes aborted due to low memory",
+				mib:         "kstat.zfs.misc.arcstats.l2_abort_lowmem",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			// Prefetch (zfetch) stats
 			{
 				name:        "zfetchstats_hits_total",
-				description: "ZFS cache fetch hits",
+				description: "ZFS prefetch hits",
 				mib:         "kstat.zfs.misc.zfetchstats.hits",
 				dataType:    bsdSysctlTypeUint64,
 				valueType:   prometheus.CounterValue,
 			},
 			{
 				name:        "zfetchstats_misses_total",
-				description: "ZFS cache fetch misses",
+				description: "ZFS prefetch misses",
 				mib:         "kstat.zfs.misc.zfetchstats.misses",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "zfetchstats_future_total",
+				description: "ZFS prefetch stream future hits (too far ahead)",
+				mib:         "kstat.zfs.misc.zfetchstats.future",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "zfetchstats_stride_total",
+				description: "ZFS prefetch stride hits",
+				mib:         "kstat.zfs.misc.zfetchstats.stride",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "zfetchstats_past_total",
+				description: "ZFS prefetch past-end-of-file hits",
+				mib:         "kstat.zfs.misc.zfetchstats.past",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.CounterValue,
+			},
+			{
+				name:        "zfetchstats_max_streams",
+				description: "ZFS prefetch maximum number of streams",
+				mib:         "kstat.zfs.misc.zfetchstats.max_streams",
+				dataType:    bsdSysctlTypeUint64,
+				valueType:   prometheus.GaugeValue,
+			},
+			{
+				name:        "zfetchstats_io_issued_total",
+				description: "ZFS prefetch I/Os issued",
+				mib:         "kstat.zfs.misc.zfetchstats.io_issued",
 				dataType:    bsdSysctlTypeUint64,
 				valueType:   prometheus.CounterValue,
 			},
@@ -267,7 +413,7 @@ func (c *zfsCollector) Update(ch chan<- prometheus.Metric) error {
 	for _, m := range c.sysctls {
 		v, err := m.Value()
 		if err != nil {
-			// debug logging
+			// MIB absent on this kernel/platform version — skip gracefully.
 			c.logger.Debug(m.name, "mib", m.mib, "couldn't get sysctl:", err)
 			continue
 		}
