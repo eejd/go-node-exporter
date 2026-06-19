@@ -62,7 +62,6 @@ func (c *cpuCollector) Update(ch chan<- prometheus.Metric) error {
 			"idle":   "cpu_nsec_idle",
 			"kernel": "cpu_nsec_kernel",
 			"user":   "cpu_nsec_user",
-			"wait":   "cpu_nsec_wait",
 		} {
 			kstatValue, err := ksCPU.GetNamed(v)
 			if err != nil {
@@ -70,6 +69,18 @@ func (c *cpuCollector) Update(ch chan<- prometheus.Metric) error {
 			}
 
 			ch <- c.cpu.mustNewConstMetric(float64(kstatValue.UintVal)/1e9, strconv.Itoa(cpu), k)
+		}
+
+		// "wait" time is reported as cpu_nsec_wait on Oracle Solaris but as
+		// cpu_ticks_wait (in clock ticks) on illumos, which lacks cpu_nsec_wait.
+		// Try nsec first; fall back to ticks converted via CLK_TCK; skip if neither.
+		if kstatValue, err := ksCPU.GetNamed("cpu_nsec_wait"); err == nil {
+			ch <- c.cpu.mustNewConstMetric(float64(kstatValue.UintVal)/1e9, strconv.Itoa(cpu), "wait")
+		} else if kstatValue, err := ksCPU.GetNamed("cpu_ticks_wait"); err == nil {
+			clkTck := float64(C.sysconf(C._SC_CLK_TCK))
+			ch <- c.cpu.mustNewConstMetric(float64(kstatValue.UintVal)/clkTck, strconv.Itoa(cpu), "wait")
+		} else {
+			c.logger.Debug("cpu wait kstat unavailable", "cpu", cpu)
 		}
 	}
 	return nil
