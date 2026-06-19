@@ -1,5 +1,5 @@
 // Copyright 2020 The Prometheus Authors
-// Licensed under the Apache License, Version 2.0 (the "License")
+// Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -11,83 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !nomeminfo
+// This file previously contained an OpenBSD/amd64-specific meminfo collector
+// that used golang.org/x/sys/unix.SysctlRaw("vm.uvmexp") with a fixed
+// unix.Uvmexp struct layout. OpenBSD 7.5 changed the struct layout and the
+// syscall ABI, causing ENOSYS / struct-size mismatch at runtime. The cgo
+// implementation in meminfo_openbsd.go (which compiles against the running
+// kernel's headers) is now used for all architectures including amd64.
+// See https://github.com/prometheus/node_exporter/issues/3084.
+
+//go:build ignore
 
 package collector
-
-import (
-	"log/slog"
-	"unsafe"
-
-	"golang.org/x/sys/unix"
-)
-
-const (
-	CTL_VFS        = 10
-	VFS_GENERIC    = 0
-	VFS_BCACHESTAT = 3
-)
-
-type bcachestats struct {
-	Numbufs        int64
-	Numbufpages    int64
-	Numdirtypages  int64
-	Numcleanpages  int64
-	Pendingwrites  int64
-	Pendingreads   int64
-	Numwrites      int64
-	Numreads       int64
-	Cachehits      int64
-	Busymapped     int64
-	Dmapages       int64
-	Highpages      int64
-	Delwribufs     int64
-	Kvaslots       int64
-	Kvaslots_avail int64
-	Highflips      int64
-	Highflops      int64
-	Dmaflips       int64
-}
-
-type meminfoCollector struct {
-	logger *slog.Logger
-}
-
-// NewMeminfoCollector returns a new Collector exposing memory stats.
-func NewMeminfoCollector(logger *slog.Logger) (Collector, error) {
-	return &meminfoCollector{
-		logger: logger,
-	}, nil
-}
-
-func (c *meminfoCollector) getMemInfo() (map[string]float64, error) {
-	uvmexpb, err := unix.SysctlRaw("vm.uvmexp")
-	if err != nil {
-		return nil, err
-	}
-
-	mib := [3]_C_int{CTL_VFS, VFS_GENERIC, VFS_BCACHESTAT}
-	bcstatsb, err := sysctl(mib[:])
-	if err != nil {
-		return nil, err
-	}
-
-	uvmexp := *(*unix.Uvmexp)(unsafe.Pointer(&uvmexpb[0]))
-	ps := float64(uvmexp.Pagesize)
-
-	bcstats := *(*bcachestats)(unsafe.Pointer(&bcstatsb[0]))
-
-	// see uvm(9)
-	return map[string]float64{
-		"active_bytes":                  ps * float64(uvmexp.Active),
-		"cache_bytes":                   ps * float64(bcstats.Numbufpages),
-		"free_bytes":                    ps * float64(uvmexp.Free),
-		"inactive_bytes":                ps * float64(uvmexp.Inactive),
-		"size_bytes":                    ps * float64(uvmexp.Npages),
-		"swap_size_bytes":               ps * float64(uvmexp.Swpages),
-		"swap_used_bytes":               ps * float64(uvmexp.Swpginuse),
-		"swapped_in_pages_bytes_total":  ps * float64(uvmexp.Pgswapin),
-		"swapped_out_pages_bytes_total": ps * float64(uvmexp.Pgswapout),
-		"wired_bytes":                   ps * float64(uvmexp.Wired),
-	}, nil
-}
