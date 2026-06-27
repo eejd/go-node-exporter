@@ -21,10 +21,46 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
+
+// darwinNetCounterSanityMax is the upper bound used to detect uninitialized
+// kernel counter fields on synthetic interfaces. The if_fake / vmnet drivers
+// never write the error and drop fields of if_data64, leaving them as stale
+// heap memory that can reach values like 3.7e15. A legitimately-busy interface
+// cannot accumulate 1e12 drops or errors, so anything above this ceiling is
+// treated as garbage. See eejd/node-exporter#8.
+const darwinNetCounterSanityMax = 1_000_000_000_000 // 1e12
+
+// isSyntheticDarwinIface reports whether the interface name indicates a macOS
+// synthetic/virtual driver whose error and drop counters are known to contain
+// uninitialized memory (the driver never calls ifnet_stat_increment for those
+// fields). Byte and packet counters from these interfaces are valid.
+//
+// Name prefixes and their drivers:
+//   - feth   — if_fake (kernel test/virtual ethernet)
+//   - vmenet — vmnet (Virtualization.framework guest NIC host-side)
+//   - bridge — if_bridge
+//   - utun   — if_utun (VPN/tunnel)
+//   - awdl   — Apple Wireless Direct Link
+//   - llw    — Low-latency WLAN
+//   - anpi   — Apple Network Protocol Interface
+//   - gif    — generic tunnel (RFC 2893)
+//   - stf    — 6to4 tunnel
+//   - ap     — Wi-Fi Access Point mode
+func isSyntheticDarwinIface(name string) bool {
+	for _, prefix := range []string{
+		"feth", "vmenet", "bridge", "utun", "awdl", "llw", "anpi", "gif", "stf", "ap",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 func getNetDevStats(filter *deviceFilter, logger *slog.Logger) (netDevStats, error) {
 	netDev := netDevStats{}
@@ -46,19 +82,34 @@ func getNetDevStats(filter *deviceFilter, logger *slog.Logger) (netDevStats, err
 			continue
 		}
 
-		netDev[iface.Name] = map[string]uint64{
+		// Byte and packet counters are reliable on all interfaces, including
+		// synthetic ones (vmenet, feth, bridge, etc.) whose traffic is real.
+		stats := map[string]uint64{
 			"receive_packets":    ifaceData.Data.Ipackets,
 			"transmit_packets":   ifaceData.Data.Opackets,
 			"receive_bytes":      ifaceData.Data.Ibytes,
 			"transmit_bytes":     ifaceData.Data.Obytes,
-			"receive_errors":     ifaceData.Data.Ierrors,
-			"transmit_errors":    ifaceData.Data.Oerrors,
-			"receive_dropped":    ifaceData.Data.Iqdrops,
 			"receive_multicast":  ifaceData.Data.Imcasts,
 			"transmit_multicast": ifaceData.Data.Omcasts,
 			"collisions":         ifaceData.Data.Collisions,
 			"noproto":            ifaceData.Data.Noproto,
 		}
+		// Error and drop counters are NOT maintained by synthetic interface
+		// drivers; those if_data64 fields remain as uninitialized heap memory.
+		// Only emit them for interfaces that are not known-synthetic AND whose
+		// values are below the sanity ceiling (backstop for any un-enumerated
+		// synthetic prefix). See eejd/node-exporter#8.
+		synthetic := isSyntheticDarwinIface(iface.Name)
+		if !synthetic && ifaceData.Data.Ierrors <= darwinNetCounterSanityMax {
+			stats["receive_errors"] = ifaceData.Data.Ierrors
+		}
+		if !synthetic && ifaceData.Data.Oerrors <= darwinNetCounterSanityMax {
+			stats["transmit_errors"] = ifaceData.Data.Oerrors
+		}
+		if !synthetic && ifaceData.Data.Iqdrops <= darwinNetCounterSanityMax {
+			stats["receive_dropped"] = ifaceData.Data.Iqdrops
+		}
+		netDev[iface.Name] = stats
 	}
 
 	return netDev, nil
