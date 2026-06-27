@@ -31,7 +31,8 @@ type typedDescFunc struct {
 }
 
 type diskstatsCollector struct {
-	descs []typedDescFunc
+	descs    []typedDescFunc
+	infoDesc typedDesc
 
 	deviceFilter deviceFilter
 	logger       *slog.Logger
@@ -51,6 +52,15 @@ func NewDiskstatsCollector(logger *slog.Logger) (Collector, error) {
 	}
 
 	return &diskstatsCollector{
+		infoDesc: typedDesc{
+			desc: prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, diskSubsystem, "info"),
+				"Info of a disk device (model, serial number, firmware revision).",
+				[]string{"device", "model", "serial", "revision"},
+				nil,
+			),
+			valueType: prometheus.GaugeValue,
+		},
 		descs: []typedDescFunc{
 			{
 				typedDesc: typedDesc{
@@ -190,6 +200,37 @@ func NewDiskstatsCollector(logger *slog.Logger) (Collector, error) {
 					return float64(stat.WriteRetries)
 				},
 			},
+			// io_time_seconds_total: total time the disk was busy (read + write).
+			// rate() of this counter gives utilization (0–1 on a single-queue disk).
+			// Uses the shared descriptor from diskstats_common.go (issue #4).
+			{
+				typedDesc: typedDesc{
+					desc:      ioTimeSecondsDesc,
+					valueType: prometheus.CounterValue,
+				},
+				value: func(stat *iostat.DriveStats) float64 {
+					return (stat.TotalReadTime + stat.TotalWriteTime).Seconds()
+				},
+			},
+			// io_time_weighted_seconds_total: sum of latency-weighted I/O time, analogous
+			// to Linux's await metric. Uses LatentReadTime + LatentWriteTime from IOKit
+			// (exposed as DriveStats.ReadLatency / WriteLatency by lufia/iostat) (issue #4).
+			{
+				typedDesc: typedDesc{
+					desc: prometheus.NewDesc(
+						prometheus.BuildFQName(namespace, diskSubsystem, "io_time_weighted_seconds_total"),
+						"The weighted number of seconds spent doing I/Os. "+
+							"This can also be used to estimate average queue wait time if you know "+
+							"the average number of requests in the queue.",
+						diskLabelNames,
+						nil,
+					),
+					valueType: prometheus.CounterValue,
+				},
+				value: func(stat *iostat.DriveStats) float64 {
+					return (stat.ReadLatency + stat.WriteLatency).Seconds()
+				},
+			},
 		},
 
 		deviceFilter: deviceFilter,
@@ -203,6 +244,13 @@ func (c *diskstatsCollector) Update(ch chan<- prometheus.Metric) error {
 		return fmt.Errorf("couldn't get diskstats: %w", err)
 	}
 
+	// Fetch IOKit device info (model/serial/revision) for node_disk_info.
+	// Failures are non-fatal; missing entries simply omit the info metric.
+	diskInfo, infoErr := getDiskInfo()
+	if infoErr != nil {
+		c.logger.Debug("failed to get disk info from IOKit", "err", infoErr)
+	}
+
 	for _, stats := range diskStats {
 		if c.deviceFilter.ignored(stats.Name) {
 			continue
@@ -210,6 +258,12 @@ func (c *diskstatsCollector) Update(ch chan<- prometheus.Metric) error {
 		for _, desc := range c.descs {
 			v := desc.value(stats)
 			ch <- desc.mustNewConstMetric(v, stats.Name)
+		}
+		// Emit node_disk_info if IOKit metadata is available for this device.
+		if diskInfo != nil {
+			if info, ok := diskInfo[stats.Name]; ok {
+				ch <- c.infoDesc.mustNewConstMetric(1.0, stats.Name, info.model, info.serial, info.revision)
+			}
 		}
 	}
 	return nil

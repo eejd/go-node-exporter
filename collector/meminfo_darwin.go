@@ -84,5 +84,13 @@ func (c *meminfoCollector) getMemInfo() (map[string]float64, error) {
 		"total_bytes":             float64(total),
 		"swap_used_bytes":         float64(swap.xsu_used),
 		"swap_total_bytes":        float64(swap.xsu_total),
+
+		// Linux-compatible aliases for cross-platform dashboards (issue #7).
+		// MemAvailable approximates available memory as free + inactive + purgeable pages,
+		// matching the heuristic used by the Linux kernel's /proc/meminfo MemAvailable field.
+		"MemTotal_bytes":     float64(total),
+		"MemAvailable_bytes": ps * (float64(vmstat.free_count) + float64(vmstat.inactive_count) + float64(vmstat.purgeable_count)),
+		"SwapTotal_bytes":    float64(swap.xsu_total),
+		"SwapFree_bytes":     float64(swap.xsu_total) - float64(swap.xsu_used),
 	}, nil
 }
